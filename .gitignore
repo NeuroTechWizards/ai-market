@@ -1,0 +1,30 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+
+# === IDE / Editor ===
+.vscode/
+.cursor/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === OneDrive / Temp ===
+~$*
+*.tmp
+*.bak
+
+# === Large AI / ML files (при необходимости) ===
+*.pt
+*.ckpt
+*.bin
+*.onnx
