@@ -28,3 +28,6 @@ Thumbs.db
 *.ckpt
 *.bin
 *.onnx
+
+# === Cursor ===
+.cursorrules
