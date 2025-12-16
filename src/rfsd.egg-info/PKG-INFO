@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: rfsd
+Version: 0.1.0
+Summary: Russian Financial Statements Database (RFSD): базовая инфраструктура для анализа финансовой отчетности российских компаний.
+Author: RFSD
+License: Proprietary
+Requires-Python: >=3.10
+Requires-Dist: pandas

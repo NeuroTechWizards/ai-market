@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rfsd"
+version = "0.1.0"
+description = "Russian Financial Statements Database (RFSD): базовая инфраструктура для анализа финансовой отчетности российских компаний."
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+  { name = "RFSD" }
+]
+dependencies = [
+  "pandas",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
