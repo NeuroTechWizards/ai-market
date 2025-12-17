@@ -3,8 +3,10 @@
 import logging
 from time import perf_counter
 from typing import Any
+from datetime import datetime
+from io import BytesIO
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 import polars as pl
 
 from . import schemas
@@ -166,3 +168,121 @@ async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schem
         meta=meta,
         files=None,
     )
+
+
+@app.post("/rfsd/company_revenue_timeseries", response_model=schemas.CompanyRevenueTimeseriesResponse)
+async def company_revenue_timeseries(request: schemas.CompanyRevenueTimeseriesRequest) -> schemas.CompanyRevenueTimeseriesResponse:
+    """Вернуть выручку компании (line_2110) по годам."""
+    
+    # 1. Годы по умолчанию
+    years_to_scan = request.years if request.years is not None else [2019, 2020, 2021, 2022, 2023]
+    
+    logger.info(f"company_revenue_timeseries: inn={request.inn}, years={years_to_scan}")
+    
+    start_time = perf_counter()
+    series: list[schemas.RevenueYear] = []
+    matched_rows = 0
+    per_year_elapsed_ms: dict[int, float] = {}
+    
+    # Поля строго фиксированы
+    fields = ["inn", "year", "line_2110"]
+    
+    # 2. Цикл по годам (без join'ов, просто сбор данных)
+    for year in years_to_scan:
+        year_start = perf_counter()
+        try:
+            # Используем существующий loader
+            df = filter_inn_year(
+                year=year,
+                inn=request.inn,
+                columns=fields,
+                limit=1  # Нам нужна только 1 строка на год для компании
+            )
+            
+            if df.height > 0:
+                row = df.row(0, named=True)
+                # Извлекаем выручку (может быть None)
+                revenue_val = row.get("line_2110")
+                # Преобразуем к float, если не None
+                if revenue_val is not None:
+                    try:
+                        revenue_val = float(revenue_val)
+                    except (ValueError, TypeError):
+                        revenue_val = None
+                        
+                series.append(schemas.RevenueYear(year=year, revenue=revenue_val))
+                matched_rows += 1
+                
+            per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
+            
+        except Exception as e:
+            # Ошибки (например, файла за год нет) игнорируем, просто идем дальше
+            logger.warning(f"Ошибка при получении выручки за {year}: {e}")
+            per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
+
+    # 3. Сортировка по year ASC
+    series.sort(key=lambda x: x.year)
+    
+    elapsed_ms = (perf_counter() - start_time) * 1000
+    
+    # 4. Формирование ответа
+    return schemas.CompanyRevenueTimeseriesResponse(
+        inn=request.inn,
+        series=series,
+        meta={
+            "years_scanned": years_to_scan,
+            "matched_rows": matched_rows,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "per_year_elapsed_ms": {str(k): round(v, 2) for k, v in per_year_elapsed_ms.items()},
+        }
+    )
+
+
+@app.post("/rfsd/export_company_revenue_xlsx")
+async def export_company_revenue_xlsx(request: schemas.ExportCompanyRevenueRequest):
+    """Экспорт выручки компании в Excel файл."""
+    
+    # 1. Повторно используем логику получения данных
+    # Формируем внутренний запрос
+    internal_req = schemas.CompanyRevenueTimeseriesRequest(
+        inn=request.inn,
+        years=request.years
+    )
+    
+    # Вызываем функцию получения данных (напрямую, как корутину)
+    data = await company_revenue_timeseries(internal_req)
+    
+    # 2. Формируем Excel
+    try:
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        
+        # Лист 1: revenue_timeseries
+        ws1 = wb.active
+        ws1.title = "revenue_timeseries"
+        ws1.append(["year", "revenue"])
+        for item in data.series:
+            ws1.append([item.year, item.revenue])
+            
+        # Лист 2: meta
+        ws2 = wb.create_sheet("meta")
+        ws2.append(["inn", "elapsed_ms", "generated_at"])
+        ws2.append([data.inn, data.meta.get("elapsed_ms"), datetime.now().isoformat()])
+        
+        # Сохраняем в буфер
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"rfsd_revenue_{request.inn}.xlsx"
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации Excel: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации Excel: {str(e)}")

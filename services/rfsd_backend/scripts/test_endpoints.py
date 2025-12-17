@@ -1,6 +1,7 @@
 import httpx
 import json
 import sys
+import os
 
 BASE_URL = "http://127.0.0.1:8000"
 
@@ -82,6 +83,76 @@ def run_tests():
             else:
                 print("FAILURE: 'year' column is MISSING.")
             print(f"Rows matched: {len(data.get('rows', []))}")
+        except Exception as e:
+            print(f"FAILED: {e}")
+            if hasattr(e, "response") and e.response:
+                print(e.response.text)
+
+        print("\n== COMPANY REVENUE TIMESERIES ==")
+        payload = {
+            "inn": "7722514880",
+            # years по умолчанию [2019-2023]
+        }
+        try:
+            resp = client.post("/rfsd/company_revenue_timeseries", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            print(f"Status: {resp.status_code}")
+            series = data.get("series", [])
+            print(f"Years returned: {[item['year'] for item in series]}")
+            print(f"Rows count: {len(series)}")
+            
+            if len(series) > 0 and "revenue" in series[0]:
+                print("SUCCESS: Revenue data received.")
+            else:
+                print("FAILURE: No revenue data or wrong format.")
+                
+        except Exception as e:
+            print(f"FAILED: {e}")
+            if hasattr(e, "response") and e.response:
+                print(e.response.text)
+
+        print("\n== EXPORT COMPANY REVENUE XLSX ==")
+        payload = {
+            "inn": "7722514880",
+            # years по умолчанию
+        }
+        
+        # Создаем папку для экспорта, если нет
+        # Мы запускаем скрипт из services/rfsd_backend/ (cwd), поэтому путь должен быть относительным
+        export_dir = "exports"
+        if not os.path.exists(export_dir):
+            try:
+                os.makedirs(export_dir, exist_ok=True)
+            except OSError as e:
+                print(f"Warning: could not create directory {export_dir}: {e}")
+
+        try:
+            resp = client.post("/rfsd/export_company_revenue_xlsx", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            
+            print(f"Status: {resp.status_code}")
+            
+            # Проверяем заголовки
+            content_disp = resp.headers.get("content-disposition", "")
+            print(f"Content-Disposition: {content_disp}")
+            
+            filename = f"test_revenue_{payload['inn']}.xlsx"
+            filepath = os.path.join(export_dir, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(resp.content)
+                
+            file_size = os.path.getsize(filepath)
+            print(f"Saved to {filepath}")
+            print(f"File size: {file_size} bytes")
+            
+            if file_size > 0:
+                print("SUCCESS")
+            else:
+                print("FAILURE: File is empty")
+                
         except Exception as e:
             print(f"FAILED: {e}")
             if hasattr(e, "response") and e.response:

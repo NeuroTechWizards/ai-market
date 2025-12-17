@@ -6,3 +6,4 @@ pyarrow
 datasets
 pytest
 httpx
+openpyxl

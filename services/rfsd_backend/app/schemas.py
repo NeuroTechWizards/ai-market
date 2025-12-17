@@ -49,3 +49,38 @@ class TableResponse(BaseModel):
         default=None,
         description="Список файлов (пока не используется)",
     )
+
+
+class CompanyRevenueTimeseriesRequest(BaseModel):
+    """Запрос на получение выручки (line_2110) по годам."""
+
+    inn: str = Field(..., description="ИНН компании")
+    years: list[int] | None = Field(
+        default=None,
+        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
+    )
+
+
+class RevenueYear(BaseModel):
+    """Данные о выручке за один год."""
+    year: int
+    revenue: float | None = None
+
+
+class CompanyRevenueTimeseriesResponse(BaseModel):
+    """Ответ с временным рядом выручки."""
+
+    inn: str
+    series: list[RevenueYear]
+    meta: dict[str, Any]
+
+
+class ExportCompanyRevenueRequest(BaseModel):
+    """Запрос на экспорт выручки в Excel."""
+
+    inn: str = Field(..., description="ИНН компании")
+    years: list[int] | None = Field(
+        default=None,
+        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
+    )
+
