@@ -1,0 +1,164 @@
+"""Основной модуль FastAPI приложения RFSD Backend."""
+
+import logging
+from time import perf_counter
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query
+import polars as pl
+
+from . import schemas
+from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year
+from .settings import settings
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI(
+    title="RFSD Backend",
+    description="Backend сервис для Russian Financial Statements Database",
+    version="0.1.0",
+)
+
+_DEFAULT_FIELDS = [
+    "inn",
+    "year",
+    "region",
+    "okved_section",
+    "okved",
+    "line_2110",
+    "line_2300",
+    "line_2400",
+]
+
+
+@app.get("/health")
+async def health_check() -> dict[str, str]:
+    """Проверка здоровья сервиса."""
+    return {"status": "ok"}
+
+
+@app.get("/rfsd/sample")
+async def get_sample(
+    year: int = Query(default=2023, ge=2011, le=2024, description="Год данных"),
+    limit: int = Query(default=5, ge=1, le=100, description="Количество строк (1-100)"),
+    fields: str | None = Query(
+        default="inn,year",
+        description="Список полей через запятую",
+    ),
+) -> dict[str, Any]:
+    """Быстрый endpoint для получения сэмпла данных без полной загрузки."""
+
+    # Парсим fields
+    if fields:
+        fields_list = [f.strip() for f in fields.split(",") if f.strip()]
+    else:
+        fields_list = ["inn", "year"]
+
+    try:
+        df = sample_year(year=year, columns=fields_list, n=limit)
+        rows = df.to_dicts()
+
+        return {
+            "year": year,
+            "columns": fields_list,
+            "rows": rows,
+        }
+    except Exception as e:
+        logger.error(f"Ошибка при получении sample: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rfsd/company_timeseries", response_model=schemas.TableResponse)
+async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schemas.TableResponse:
+    """Поиск компании по ИНН в нескольких годах."""
+
+    # Определяем годы для сканирования
+    years_to_scan = request.years if request.years is not None else [2022, 2023, 2024]
+
+    # Определяем поля
+    fields = request.fields if request.fields is not None else _DEFAULT_FIELDS.copy()
+
+    # Проверяем схему и фильтруем несуществующие колонки
+    dropped_fields: list[str] = []
+    if years_to_scan:
+        # Берем схему первого года как эталон
+        schema_columns = get_schema_columns(years_to_scan[0])
+        # year всегда доступен (виртуальная колонка)
+        valid_fields = [f for f in fields if f in schema_columns or f == "year"]
+        dropped_fields = [f for f in fields if f not in valid_fields]
+        fields = valid_fields
+
+    logger.info(
+        f"company_timeseries: inn={request.inn}, years={years_to_scan}, "
+        f"fields={fields}, limit={request.limit}"
+    )
+
+    start_time = perf_counter()
+    frames: list = []
+    per_year_elapsed_ms: dict[int, float] = {}
+
+    # Сканируем по годам
+    for year in years_to_scan:
+        year_start = perf_counter()
+        try:
+            df = filter_inn_year(
+                year=year,
+                inn=request.inn,
+                columns=fields,
+                limit=request.limit,
+            )
+            if df.height > 0:
+                frames.append(df)
+            per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
+        except Exception as e:
+            logger.warning(f"Ошибка при обработке года {year}: {e}")
+            per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
+
+    # Конкатенируем результаты
+    if frames:
+        if len(frames) > 1:
+            result_df = pl.concat(frames, how="diagonal")
+        else:
+            result_df = frames[0]
+
+        # Сортируем по year, если колонка есть
+        if "year" in result_df.columns:
+            result_df = result_df.sort("year")
+
+        # Обрезаем до limit
+        if result_df.height > request.limit:
+            result_df = result_df.head(request.limit)
+
+        columns = result_df.columns
+        rows = result_df.to_dicts()
+        matched_rows = result_df.height
+    else:
+        # Ничего не найдено
+        columns = fields
+        rows = []
+        matched_rows = 0
+
+    elapsed_ms = (perf_counter() - start_time) * 1000
+
+    logger.info(
+        f"company_timeseries завершен: inn={request.inn}, "
+        f"matched_rows={matched_rows}, elapsed_ms={elapsed_ms:.2f}"
+    )
+
+    meta = {
+        "years_scanned": years_to_scan,
+        "matched_rows": matched_rows,
+        "elapsed_ms": round(elapsed_ms, 2),
+        "per_year_elapsed_ms": {str(k): round(v, 2) for k, v in per_year_elapsed_ms.items()},
+    }
+
+    if dropped_fields:
+        meta["dropped_fields"] = dropped_fields
+
+    return schemas.TableResponse(
+        columns=columns,
+        rows=rows,
+        meta=meta,
+        files=None,
+    )
