@@ -7,7 +7,8 @@ BASE_URL = "http://127.0.0.1:8000"
 def run_tests():
     print(f"Checking {BASE_URL}...\n")
     
-    with httpx.Client(base_url=BASE_URL, timeout=30.0) as client:
+    # Общий клиент с увеличенным таймаутом
+    with httpx.Client(base_url=BASE_URL, timeout=60.0) as client:
         # 1. Health Check
         print("== HEALTH CHECK ==")
         try:
@@ -57,6 +58,34 @@ def run_tests():
         except Exception as e:
             print(f"FAILED: {e}")
             print(resp.text)
+
+        print("\n== COMPANY TIMESERIES (Implicit Year Check) ==")
+        # Request multiple years WITHOUT 'year' in fields. 
+        # Expectation: 'year' should be auto-added to columns.
+        payload = {
+            "inn": "7722514880",
+            "years": [2022, 2023],
+            "fields": ["inn", "region", "okved_section", "okved"],  # без "year"
+            "limit": 1
+        }
+        
+        try:
+            # Увеличенный таймаут специально для тяжелого запроса
+            resp = client.post("/rfsd/company_timeseries", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            data = resp.json()
+            columns = data.get("columns", [])
+            print(f"Status: {resp.status_code}")
+            print(f"Columns: {columns}")
+            if "year" in columns:
+                print("SUCCESS: 'year' column was automatically added.")
+            else:
+                print("FAILURE: 'year' column is MISSING.")
+            print(f"Rows matched: {len(data.get('rows', []))}")
+        except Exception as e:
+            print(f"FAILED: {e}")
+            if hasattr(e, "response") and e.response:
+                print(e.response.text)
 
 if __name__ == "__main__":
     try:

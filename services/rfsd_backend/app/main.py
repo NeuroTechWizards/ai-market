@@ -79,6 +79,10 @@ async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schem
     # Определяем поля
     fields = request.fields if request.fields is not None else _DEFAULT_FIELDS.copy()
 
+    # Если сканируем несколько лет, нужно обязательно вернуть year, чтобы различать данные
+    if len(years_to_scan) > 1 and "year" not in fields:
+        fields.append("year")
+
     # Проверяем схему и фильтруем несуществующие колонки
     dropped_fields: list[str] = []
     if years_to_scan:
