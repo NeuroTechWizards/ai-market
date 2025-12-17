@@ -7,7 +7,8 @@ logger = logging.getLogger(__name__)
 class RFSDClient:
     def __init__(self):
         self.base_url = settings.RFSD_BACKEND_URL
-        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+        # Увеличиваем общий таймаут до 60 секунд
+        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=60.0)
 
     async def health(self) -> bool:
         try:
