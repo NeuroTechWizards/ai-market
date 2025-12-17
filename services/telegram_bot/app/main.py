@@ -1,4 +1,7 @@
 import logging
+import asyncio
+import os
+import getpass
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -10,21 +13,18 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+# Отключаем лишний шум от httpx (чтобы не светить токены)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            "Привет! Я бот для работы с базой фин. отчетности (RFSD).\n\n"
-            "Примеры команд:\n"
-            "1. 'ИНН 7722514880' -> получу базовые данные за 5 лет\n"
-            "2. 'ИНН 7722514880 выручка' -> только динамика выручки\n"
-            "3. 'ИНН 7722514880 xlsx' -> скачаю полный Excel-профиль\n"
-        )
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Привет! Я RFSD бот. Пришлите ИНН (10/12 цифр) и запрос.\n"
+        "Например: 'ИНН 7722514880 xlsx' (полный отчет) или 'ИНН 7722514880 выручка'."
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
@@ -33,14 +33,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отправляем "печатает...", чтобы пользователь видел реакцию
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Роутинг
+    # Роутинг (он у нас async)
     result = await router.route_message(user_text)
     
     if result["type"] == "text":
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=result["content"]
-        )
+        await update.message.reply_text(result["content"])
     elif result["type"] == "document":
         await context.bot.send_document(
             chat_id=update.effective_chat.id,
@@ -49,18 +46,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=result.get("caption", "")
         )
 
-def main():
+async def runner():
+    # Проверка и интерактивный ввод токена, если его нет
     if not settings.TELEGRAM_BOT_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN not found in .env")
-        return
+        print("TELEGRAM_BOT_TOKEN не найден в переменных окружения (.env).")
+        try:
+            token_input = getpass.getpass("Введите TELEGRAM_BOT_TOKEN: ").strip()
+            if token_input:
+                # ВАЖНО: Обновляем settings и os.environ
+                settings.TELEGRAM_BOT_TOKEN = token_input
+                os.environ["TELEGRAM_BOT_TOKEN"] = token_input
+            else:
+                print("Токен не введен. Запуск невозможен.")
+                return
+        except Exception as e:
+            print(f"Ошибка ввода: {e}")
+            return
 
     application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).build()
+
     
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    application.add_handler(CommandHandler('start', start_cmd))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text))
     
-    print("Bot started... (Polling)")
-    application.run_polling()
+    # Явный lifecycle для стабильности
+    await application.initialize()
+    await application.start()
+    
+    # Запускаем поллинг вручную
+    # Важно: updater.start_polling возвращает корутину, которую надо заавейтить
+    await application.updater.start_polling()
+    
+    logger.info("Bot polling started")
+    
+    # Ждём бесконечно, пока не прилетит сигнал остановки (Ctrl+C обработает asyncio)
+    # Используем Event для блокировки
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        logger.info("Stopping bot...")
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        logger.info("Bot stopped")
+
+def main():
+    try:
+        asyncio.run(runner())
+    except KeyboardInterrupt:
+        # Штатное завершение по Ctrl+C
+        pass
 
 if __name__ == '__main__':
     main()

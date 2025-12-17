@@ -55,7 +55,18 @@ class RFSDClient:
         """Экспорт полного профиля (универсальный)"""
         try:
             payload = {"inn": inn, "years": years}
-            resp = await self.client.post("/rfsd/export_full_profile_xlsx", json=payload, timeout=120.0)
+            # Добавляем Connection: close, чтобы избежать проблем с keep-alive при долгих запросах
+            resp = await self.client.post(
+                "/rfsd/export_full_profile_xlsx", 
+                json=payload, 
+                timeout=120.0,
+                headers={"Connection": "close"}
+            )
+            
+            if resp.status_code != 200:
+                logger.error(f"Backend error: {resp.status_code} - {resp.text}")
+                return None
+                
             resp.raise_for_status()
             return resp.content
         except Exception as e:

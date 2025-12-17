@@ -154,6 +154,35 @@ def run_tests():
             if hasattr(e, "response") and e.response:
                 print(e.response.text)
 
+        print("\n== EXPORT FULL PROFILE XLSX (DEBUG 1 YEAR) ==")
+        # Пробуем скачать только 1 год, чтобы проверить, работает ли сам механизм генерации
+        payload_debug = {
+            "inn": "7722514880",
+            "years": [2023]
+        }
+        
+        try:
+            resp = client.post("/rfsd/export_full_profile_xlsx", json=payload_debug, timeout=120.0)
+            
+            if resp.status_code == 200:
+                print(f"Status: {resp.status_code}")
+                filename_debug = f"debug_profile_{payload_debug['inn']}_2023.xlsx"
+                filepath_debug = os.path.join(export_dir, filename_debug)
+                
+                with open(filepath_debug, "wb") as f:
+                    f.write(resp.content)
+                    
+                file_size_debug = os.path.getsize(filepath_debug)
+                print(f"Saved to {filepath_debug}")
+                print(f"File size: {file_size_debug} bytes")
+                print("SUCCESS (DEBUG)")
+            else:
+                print(f"FAILED: Status {resp.status_code}")
+                print(resp.text[:500])
+                
+        except Exception as e:
+            print(f"FAILED (Exception): {e}")
+
 if __name__ == "__main__":
     try:
         run_tests()
