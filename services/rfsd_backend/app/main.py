@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query, Response
 import polars as pl
 
 from . import schemas
-from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year
+from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year, load_indicators_dict
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,16 @@ _DEFAULT_FIELDS = [
     "line_2400",
 ]
 
+
+_INDICATORS_DICT = {}
+
+@app.on_event("startup")
+async def startup_event():
+    """Загружаем справочники при старте."""
+    global _INDICATORS_DICT
+    logger.info("Loading indicators databook...")
+    _INDICATORS_DICT = load_indicators_dict()
+    logger.info(f"Loaded {len(_INDICATORS_DICT)} indicators.")
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
@@ -286,3 +296,104 @@ async def export_company_revenue_xlsx(request: schemas.ExportCompanyRevenueReque
     except Exception as e:
         logger.error(f"Ошибка при генерации Excel: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка генерации Excel: {str(e)}")
+
+
+@app.post("/rfsd/export_full_profile_xlsx")
+async def export_full_profile_xlsx(request: schemas.ExportFullProfileRequest):
+    """Экспорт ВСЕХ финансовых показателей компании в Excel (Profile)."""
+
+    years_to_scan = request.years if request.years is not None else [2019, 2020, 2021, 2022, 2023]
+    logger.info(f"export_full_profile_xlsx: inn={request.inn}, years={years_to_scan}")
+    
+    start_time = perf_counter()
+
+    try:
+        # 1. Получаем список всех доступных колонок из схемы последнего года
+        schema_cols = get_schema_columns(2023)
+        # Фильтруем только line_...
+        financial_lines = [c for c in schema_cols if c.startswith("line_")]
+        financial_lines.sort() 
+        
+        fields_to_load = ["inn", "year"] + financial_lines
+        
+        # 2. Скачиваем данные по годам
+        frames = []
+        for year in years_to_scan:
+            try:
+                # Фильтруем те поля, которые реально есть в ЭТОМ году
+                current_year_schema = get_schema_columns(year)
+                current_fields = [f for f in fields_to_load if f in current_year_schema or f == "year"]
+                
+                df = filter_inn_year(
+                    year=year,
+                    inn=request.inn,
+                    columns=current_fields,
+                    limit=1
+                )
+                if df.height > 0:
+                    frames.append(df)
+            except Exception as e:
+                logger.warning(f"Error loading year {year}: {e}")
+        
+        # 3. Объединяем
+        if not frames:
+             raise HTTPException(status_code=404, detail="Data not found for this INN")
+             
+        full_df = pl.concat(frames, how="diagonal")
+        full_df = full_df.sort("year")
+        
+        # 4. Трансформируем в формат: Строки = Показатели, Столбцы = Годы
+        matrix = {code: {} for code in financial_lines}
+        
+        for row in full_df.to_dicts():
+            y = row["year"]
+            for k, v in row.items():
+                if k.startswith("line_") and v is not None:
+                     matrix[k][y] = v
+                     
+        # Используем глобальный справочник, загруженный при старте
+        # indicators_dict = load_indicators_dict() <- БЫЛО
+        indicators_dict = _INDICATORS_DICT
+                     
+        # 5. Генерируем Excel
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Financial Profile"
+        
+        # Заголовки: Indicator Code | Indicator Name (RU) | 2019 | 2020 | ...
+        headers = ["Indicator Code", "Indicator Name (RU)"] + [str(y) for y in years_to_scan]
+        ws.append(headers)
+        
+        # Заполняем строки
+        for code in financial_lines:
+            name_ru = indicators_dict.get(code, "")
+            row_data = [code, name_ru]
+            for year in years_to_scan:
+                val = matrix.get(code, {}).get(year)
+                row_data.append(val)
+            ws.append(row_data)
+            
+        # Лист 2: meta
+        ws2 = wb.create_sheet("meta")
+        ws2.append(["inn", "generated_at", "elapsed_s"])
+        elapsed = perf_counter() - start_time
+        ws2.append([request.inn, datetime.now().isoformat(), round(elapsed, 2)])
+        
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"rfsd_profile_{request.inn}.xlsx"
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Full profile export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

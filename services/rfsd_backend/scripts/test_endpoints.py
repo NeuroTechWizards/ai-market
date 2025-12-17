@@ -113,14 +113,13 @@ def run_tests():
             if hasattr(e, "response") and e.response:
                 print(e.response.text)
 
-        print("\n== EXPORT COMPANY REVENUE XLSX ==")
+        print("\n== EXPORT FULL PROFILE XLSX (Final) ==")
         payload = {
             "inn": "7722514880",
-            # years по умолчанию
+            # years по умолчанию [2019-2023]
         }
         
-        # Создаем папку для экспорта, если нет
-        # Мы запускаем скрипт из services/rfsd_backend/ (cwd), поэтому путь должен быть относительным
+        # Создаем папку для экспорта (в корне, если запускаем из services/rfsd_backend)
         export_dir = "exports"
         if not os.path.exists(export_dir):
             try:
@@ -129,16 +128,13 @@ def run_tests():
                 print(f"Warning: could not create directory {export_dir}: {e}")
 
         try:
-            resp = client.post("/rfsd/export_company_revenue_xlsx", json=payload, timeout=60.0)
+            # Таймаут побольше
+            resp = client.post("/rfsd/export_full_profile_xlsx", json=payload, timeout=120.0)
             resp.raise_for_status()
             
             print(f"Status: {resp.status_code}")
             
-            # Проверяем заголовки
-            content_disp = resp.headers.get("content-disposition", "")
-            print(f"Content-Disposition: {content_disp}")
-            
-            filename = f"test_revenue_{payload['inn']}.xlsx"
+            filename = f"rfsd_profile_{payload['inn']}.xlsx"
             filepath = os.path.join(export_dir, filename)
             
             with open(filepath, "wb") as f:
@@ -148,10 +144,10 @@ def run_tests():
             print(f"Saved to {filepath}")
             print(f"File size: {file_size} bytes")
             
-            if file_size > 0:
+            if file_size > 5000:
                 print("SUCCESS")
             else:
-                print("FAILURE: File is empty")
+                print("FAILURE: File seems too small")
                 
         except Exception as e:
             print(f"FAILED: {e}")

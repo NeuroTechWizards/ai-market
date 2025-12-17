@@ -106,3 +106,62 @@ def get_schema_columns(year: int) -> list[str]:
     if "year" not in columns:
         columns.append("year")
     return columns
+
+
+def load_indicators_dict() -> dict[str, str]:
+    """Загружает справочник индикаторов из Excel (docs/databook/rfsd_databook_ru.xlsx).
+    
+    Возвращает словарь {code: name_ru}. Использует openpyxl напрямую.
+    """
+    import os
+    import openpyxl
+    
+    # Ищем корень проекта
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    
+    possible_paths = [
+        os.path.join(project_root, "docs", "databook", "rfsd_databook_ru.xlsx"),
+        os.path.join(project_root, "..", "docs", "databook", "rfsd_databook_ru.xlsx"),
+        r"D:\OneDrive\Работа\AI consalting\ИИ-агент инвест дир\Программа и Код\AI market\docs\databook\rfsd_databook_ru.xlsx"
+    ]
+    
+    databook_path = None
+    for p in possible_paths:
+        if os.path.exists(p):
+            databook_path = p
+            break
+            
+    if not databook_path:
+        return {}
+
+    try:
+        # Используем openpyxl вместо polars.read_excel, чтобы избежать проблем с движками
+        wb = openpyxl.load_workbook(databook_path, read_only=True, data_only=True)
+        # Ищем лист 'databook' или берем активный
+        if 'databook' in wb.sheetnames:
+            ws = wb['databook']
+        else:
+            ws = wb.active
+            
+        # Читаем заголовки (1-я строка)
+        headers = [cell.value for cell in ws[1]]
+        try:
+            code_idx = headers.index('code')
+            name_idx = headers.index('name_ru')
+        except ValueError:
+            return {}
+            
+        result = {}
+        # Читаем данные (с 2-й строки)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            code = row[code_idx]
+            name = row[name_idx]
+            if code:
+                result[str(code)] = str(name) if name else ""
+                
+        return result
+    except Exception as e:
+        # Логируем ошибку, но не падаем
+        print(f"Error loading databook: {e}")
+        return {}

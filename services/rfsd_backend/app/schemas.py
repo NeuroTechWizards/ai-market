@@ -84,3 +84,13 @@ class ExportCompanyRevenueRequest(BaseModel):
         description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
     )
 
+
+class ExportFullProfileRequest(BaseModel):
+    """Запрос на экспорт ВСЕХ показателей в Excel."""
+
+    inn: str = Field(..., description="ИНН компании")
+    years: list[int] | None = Field(
+        default=None,
+        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
+    )
+
