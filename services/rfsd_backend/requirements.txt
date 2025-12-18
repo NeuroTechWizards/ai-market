@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+polars
+pyarrow
+datasets
+pytest
+httpx
+openpyxl
+openai
