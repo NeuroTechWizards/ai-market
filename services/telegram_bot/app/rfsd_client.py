@@ -86,4 +86,16 @@ class RFSDClient:
             logger.error(f"Error getting benchmark: {e}")
             return None
 
+    async def agent_query(self, query: str) -> dict[str, Any] | None:
+        """Отправить запрос AI-агенту."""
+        try:
+            payload = {"query": query}
+            # Агент может думать долго (до 2 минут)
+            resp = await self.client.post("/agent/query", json=payload, timeout=120.0)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Error getting agent response: {e}")
+            return None
+
 rfsd_client = RFSDClient()

@@ -60,8 +60,15 @@ class Router:
             intent = "benchmark"
         elif any(kw in text_lower for kw in ["профиль", "все показатели", "все поля", "полный"]):
             intent = "full_profile"
+        # Новые ключевые слова для агента
+        elif any(kw in text_lower for kw in ["анализ", "выводы", "резюме", "итоги", "состояние", "проанализируй", "сделай"]):
+            intent = "agent"
         else:
-            intent = "full_profile"
+            # Если запрос длинный и содержит ИНН, возможно это вопрос к агенту
+            if len(text.split()) > 5:
+                intent = "agent"
+            else:
+                intent = "full_profile"
             
         return intent, fmt
 
@@ -228,6 +235,14 @@ class Router:
                 lines.append(f"⚠️ Некоторые годы ({meta['rate_limit_errors']}) не обработаны из-за rate limiting.")
             
             return {"type": "text", "content": "\n".join(lines)}
+
+        elif intent == "agent":
+            # Запрос к AI-агенту
+            resp = await rfsd_client.agent_query(text)
+            if not resp or not resp.get("answer"):
+                return {"type": "text", "content": "Агент не смог подготовить ответ. Возможно, нет данных или сервис перегружен."}
+            
+            return {"type": "text", "content": resp["answer"]}
 
         else:
             fields = ["inn", "year", "line_2110", "line_2400"]

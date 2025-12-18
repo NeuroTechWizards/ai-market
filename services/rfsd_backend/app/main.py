@@ -52,7 +52,24 @@ async def startup_event():
     _INDICATORS_DICT = load_indicators_dict()
     logger.info(f"Loaded {len(_INDICATORS_DICT)} indicators.")
 
-@app.get("/health")
+from .agent_orchestrator import agent
+
+@app.post("/agent/query", response_model=schemas.AgentQueryResponse)
+async def agent_query(request: schemas.AgentQueryRequest) -> schemas.AgentQueryResponse:
+    """Эндпоинт для AI-агента (аналитика текста)."""
+    start_time = perf_counter()
+    logger.info(f"Agent query: {request.query}")
+    
+    answer = await agent.process_query(request.query)
+    
+    elapsed_ms = (perf_counter() - start_time) * 1000
+    
+    return schemas.AgentQueryResponse(
+        answer=answer,
+        meta={
+            "elapsed_ms": round(elapsed_ms, 2)
+        }
+    )
 async def health_check() -> dict[str, str]:
     """Проверка здоровья сервиса."""
     return {"status": "ok"}

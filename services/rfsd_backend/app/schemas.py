@@ -72,3 +72,15 @@ class SectorBenchmarkRequest(BaseModel):
     years: list[int] | None = Field(default=None, description="Список годов. По умолчанию последние 5 лет.")
     metrics: list[str] | None = Field(default=["line_2110", "line_2400"], description="Коды метрик")
     limit_sector: int = Field(default=200000, description="Лимит строк сектора для безопасности")
+
+
+class AgentQueryRequest(BaseModel):
+    """Запрос к AI-агенту."""
+    query: str = Field(..., description="Текст запроса на естественном языке")
+    context: dict[str, Any] | None = Field(default=None, description="Контекст (user_id, etc)")
+
+
+class AgentQueryResponse(BaseModel):
+    """Ответ AI-агента."""
+    answer: str = Field(..., description="Текстовый ответ LLM")
+    meta: dict[str, Any] = Field(default_factory=dict, description="Метаданные")
