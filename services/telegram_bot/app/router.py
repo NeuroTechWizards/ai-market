@@ -185,14 +185,38 @@ class Router:
             
             for r in rows:
                 y = r.get("year")
-                rev_comp = self._format_number(r.get("company_line_2110"))
-                rev_med = self._format_number(r.get("sector_median_line_2110"))
-                prof_comp = self._format_number(r.get("company_line_2400"))
-                prof_med = self._format_number(r.get("sector_median_line_2400"))
                 
-                lines.append(f"📅 {y}")
-                lines.append(f"  Выручка: {rev_comp} (Рынок: {rev_med})")
-                lines.append(f"  Прибыль: {prof_comp} (Рынок: {prof_med})")
+                # Функция для получения эмодзи сравнения
+                def get_trend_emoji(comp_val, sector_val):
+                    try:
+                        if comp_val is None or sector_val is None:
+                            return ""
+                        return "📈" if float(comp_val) >= float(sector_val) else "📉"
+                    except (ValueError, TypeError):
+                        return ""
+
+                rev_comp_val = r.get("company_line_2110")
+                rev_med_val = r.get("sector_median_line_2110")
+                rev_emoji = get_trend_emoji(rev_comp_val, rev_med_val)
+                
+                rev_comp = self._format_number(rev_comp_val)
+                rev_med = self._format_number(rev_med_val)
+                
+                prof_comp_val = r.get("company_line_2400")
+                prof_med_val = r.get("sector_median_line_2400")
+                
+                prof_comp = self._format_number(prof_comp_val)
+                
+                # Эмодзи для прибыли добавляем, только если оно отличается от выручки или для красоты
+                # Но по ТЗ эмодзи ставится рядом с годом. Сделаем интегральную оценку или по выручке?
+                # ТЗ: "если компания ниже медианы -> 📉". Обычно смотрят по выручке или по обоим.
+                # Сделаем так: если выручка выше - 📈, иначе 📉.
+                
+                main_emoji = get_trend_emoji(rev_comp_val, rev_med_val)
+
+                lines.append(f"{y} {main_emoji}")
+                lines.append(f"  Выручка: {rev_comp} | Рынок: {rev_med}")
+                lines.append(f"  Прибыль: {prof_comp} | Рынок: {self._format_number(prof_med_val)}")
                 lines.append("")
                 
             lines.append(f"Всего компаний в выборке: {self._format_number(rows[0].get('sector_count'))}")

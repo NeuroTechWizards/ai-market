@@ -78,8 +78,8 @@ class RFSDClient:
                 "metrics": ["line_2110", "line_2400"]
             }
             # Бенчмарк может быть долгим, особенно для нескольких лет
-            # Увеличиваем таймаут до 120 секунд
-            resp = await self.client.post("/rfsd/sector_benchmark", json=payload, timeout=120.0)
+            # Увеличиваем таймаут до 300 секунд (5 минут)
+            resp = await self.client.post("/rfsd/sector_benchmark", json=payload, timeout=300.0)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

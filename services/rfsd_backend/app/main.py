@@ -40,6 +40,14 @@ _INDICATORS_DICT = {}
 async def startup_event():
     """Загружаем справочники при старте."""
     global _INDICATORS_DICT
+    
+    # Проверка токена
+    if settings.HF_TOKEN:
+        masked_token = settings.HF_TOKEN[:4] + "..." + settings.HF_TOKEN[-4:]
+        logger.info(f"✅ HF_TOKEN found: {masked_token}")
+    else:
+        logger.warning("❌ HF_TOKEN NOT found! Requests might be rate-limited.")
+        
     logger.info("Loading indicators databook...")
     _INDICATORS_DICT = load_indicators_dict()
     logger.info(f"Loaded {len(_INDICATORS_DICT)} indicators.")
@@ -328,7 +336,7 @@ async def sector_benchmark(request: schemas.SectorBenchmarkRequest) -> schemas.T
     for idx, year in enumerate(years_to_scan):
         # Добавляем задержку между запросами к Hugging Face для снижения rate limiting
         if idx > 0:
-            await asyncio.sleep(0.5)  # 500ms задержка между годами
+            await asyncio.sleep(2.0)  # 2 секунды задержка между годами
         
         year_start = perf_counter()
         try:
@@ -411,6 +419,9 @@ async def sector_benchmark(request: schemas.SectorBenchmarkRequest) -> schemas.T
             per_year_elapsed_ms[str(year)] = (perf_counter() - year_start) * 1000
 
     elapsed_ms = (perf_counter() - start_time) * 1000
+    
+    # Сортируем result_rows по году перед возвратом
+    result_rows.sort(key=lambda x: x["year"])
     
     # Формируем колонки
     columns = ["year", "okved_section", "sector_count", "sampled_rows"]
