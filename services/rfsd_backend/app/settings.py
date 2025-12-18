@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     app_name: str = "RFSD Backend"
     debug: bool = False
+    HF_TOKEN: str | None = None
 
     class Config:
         env_file = ".env"

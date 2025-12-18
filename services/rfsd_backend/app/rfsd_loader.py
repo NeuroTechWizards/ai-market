@@ -20,11 +20,19 @@ def _validate_year(year: int) -> None:
         raise ValueError(f"Год {year} недоступен. Допустимо: {min(_AVAILABLE_YEARS)}–{max(_AVAILABLE_YEARS)}")
 
 
+from .settings import settings
+
+
 def _scan_year(year: int, columns: Sequence[str] | None = None) -> pl.LazyFrame:
     """Возвращает ленивый скан по году с добавленной колонкой year."""
     _validate_year(year)
     path = f"hf://datasets/irlspbru/RFSD/RFSD/year={year}/*.parquet"
-    scan = pl.scan_parquet(path)
+    
+    storage_options = None
+    if settings.HF_TOKEN:
+        storage_options = {"token": settings.HF_TOKEN}
+        
+    scan = pl.scan_parquet(path, storage_options=storage_options)
     scan = scan.with_columns(pl.lit(year).alias("year"))
     if columns is not None:
         scan = scan.select(list(columns))
@@ -58,7 +66,12 @@ def get_schema_columns(year: int) -> list[str]:
     """Возвращает список доступных колонок для указанного года."""
     _validate_year(year)
     path = f"hf://datasets/irlspbru/RFSD/RFSD/year={year}/*.parquet"
-    scan = pl.scan_parquet(path)
+    
+    storage_options = None
+    if settings.HF_TOKEN:
+        storage_options = {"token": settings.HF_TOKEN}
+        
+    scan = pl.scan_parquet(path, storage_options=storage_options)
     schema = scan.collect_schema()
     columns = list(schema.keys())
     if "year" not in columns:
