@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-polars
-pyarrow
-datasets
-pytest
-httpx
-openpyxl

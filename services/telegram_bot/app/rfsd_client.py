@@ -1,5 +1,6 @@
 import httpx
 import logging
+from typing import Any
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,7 @@ class RFSDClient:
 
     async def company_timeseries(self, inn: str, years: list[int], fields: list[str], limit: int):
         try:
-            payload = {
-                "inn": inn,
-                "years": years,
-                "fields": fields,
-                "limit": limit
-            }
+            payload = {"inn": inn, "years": years, "fields": fields, "limit": limit}
             resp = await self.client.post("/rfsd/company_timeseries", json=payload)
             resp.raise_for_status()
             return resp.json()
@@ -56,7 +52,6 @@ class RFSDClient:
         """Экспорт полного профиля (универсальный)"""
         try:
             payload = {"inn": inn, "years": years}
-            # Добавляем Connection: close, чтобы избежать проблем с keep-alive при долгих запросах
             resp = await self.client.post(
                 "/rfsd/export_full_profile_xlsx", 
                 json=payload, 
@@ -72,6 +67,23 @@ class RFSDClient:
             return resp.content
         except Exception as e:
             logger.error(f"Error exporting full profile: {e}")
+            return None
+
+    async def sector_benchmark(self, inn: str, years: list[int] | None = None) -> dict[str, Any] | None:
+        """Получить сравнение с отраслью."""
+        try:
+            payload = {
+                "inn": inn, 
+                "years": years,
+                "metrics": ["line_2110", "line_2400"]
+            }
+            # Бенчмарк может быть долгим, особенно для нескольких лет
+            # Увеличиваем таймаут до 120 секунд
+            resp = await self.client.post("/rfsd/sector_benchmark", json=payload, timeout=120.0)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Error getting benchmark: {e}")
             return None
 
 rfsd_client = RFSDClient()

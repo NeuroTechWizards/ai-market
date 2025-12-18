@@ -10,7 +10,6 @@ class Router:
     """Парсер и роутер сообщений (NL-интерпретатор)."""
     
     def extract_inn(self, text: str) -> str | None:
-        # Ищем 10 или 12 цифр
         match = re.search(r'\b\d{10}\b|\b\d{12}\b', text)
         if match:
             return match.group(0)
@@ -18,7 +17,7 @@ class Router:
 
     def parse_years(self, text: str) -> list[int]:
         """Извлекает годы из текста или возвращает дефолт."""
-        # 1. Диапазон: 2021-2023, 2021–2023
+        # Сначала ищем диапазон годов (например, "2021-2023")
         range_match = re.search(r'(\d{4})\s*[-–—]\s*(\d{4})', text)
         if range_match:
             start = int(range_match.group(1))
@@ -27,38 +26,42 @@ class Router:
                 start, end = end, start
             return list(range(start, end + 1))
 
-        # 2. "За N лет", "последние N лет"
-        # Ищем число рядом со словом лет/год
+        # Затем ищем "последние N лет"
         last_match = re.search(r'(?:за|последни[ех])\s*(\d+)\s*(?:лет|год|г\.?)', text, re.IGNORECASE)
         if last_match:
             n = int(last_match.group(1))
-            # Ограничиваем верхней границей (данные есть пока до 2023/2024)
-            # Берем 2023 как безопасный максимум
             end_year = 2023 
             start_year = end_year - n + 1
             return list(range(start_year, end_year + 1))
 
-        # 3. Default (последние 5 лет)
-        return [2019, 2020, 2021, 2022, 2023]
+        # Ищем одиночный год (4 цифры в диапазоне 2010-2024)
+        single_year_match = re.search(r'\b(20[12][0-9])\b', text)
+        if single_year_match:
+            year = int(single_year_match.group(1))
+            if 2010 <= year <= 2024:
+                return [year]
+
+        # Если ничего не найдено, возвращаем дефолт (последний год)
+        return [2023]
 
     def parse_intent_format(self, text: str) -> tuple[str, str]:
         """Определяет намерение и формат ответа."""
         text_lower = text.lower()
         
-        # Формат
         fmt = "text"
         if any(kw in text_lower for kw in ["xlsx", "эксель", "excel"]):
             fmt = "xlsx"
             
-        # Интент
         if "выруч" in text_lower:
             intent = "revenue"
         elif "прибыл" in text_lower:
             intent = "profit"
+        elif any(kw in text_lower for kw in ["сравни", "бенчмарк", "benchmark", "отрасл"]):
+            intent = "benchmark"
         elif any(kw in text_lower for kw in ["профиль", "все показатели", "все поля", "полный"]):
             intent = "full_profile"
         else:
-            intent = "full_profile" # Дефолтное поведение (базовый профиль)
+            intent = "full_profile"
             
         return intent, fmt
 
@@ -66,7 +69,6 @@ class Router:
         if val is None:
             return "-"
         try:
-            # Форматируем с разделителем тысяч
             return f"{float(val):,.0f}".replace(",", " ")
         except (ValueError, TypeError):
             return str(val)
@@ -85,11 +87,7 @@ class Router:
         
         logger.info(f"Routing: inn={inn}, intent={intent}, fmt={fmt}, years={years}")
 
-        # --- Обработка XLSX (единая точка входа) ---
         if fmt == "xlsx":
-            # Для любого интента в XLSX формате пока используем полный профиль, 
-            # так как он содержит всё (и выручку, и прибыль).
-            # filename делаем понятным
             filename_map = {
                 "revenue": "revenue",
                 "profit": "profit",
@@ -111,9 +109,6 @@ class Router:
                     "content": "Не удалось сгенерировать файл. Возможно, нет данных или сервис недоступен."
                 }
 
-        # --- Обработка Текстовых запросов ---
-        
-        # 1. Выручка
         if intent == "revenue":
             data = await rfsd_client.company_revenue_timeseries(inn, years)
             if not data or not data.get("series"):
@@ -121,7 +116,6 @@ class Router:
             
             lines = [f"📊 Выручка ИНН {inn}", ""]
             series = data["series"]
-            # Гарантируем сортировку
             series.sort(key=lambda x: x["year"])
             
             count = 0
@@ -138,7 +132,6 @@ class Router:
                 
             return {"type": "text", "content": "\n".join(lines)}
 
-        # 2. Прибыль (line_2400)
         elif intent == "profit":
             fields = ["inn", "year", "line_2400"]
             data = await rfsd_client.company_timeseries(inn, years, fields, limit=100)
@@ -164,9 +157,55 @@ class Router:
                 
             return {"type": "text", "content": "\n".join(lines)}
 
-        # 3. Базовый профиль (Full Profile Text)
+        elif intent == "benchmark":
+            data = await rfsd_client.sector_benchmark(inn, years)
+            if not data or not data.get("rows"):
+                # Проверяем, есть ли информация о rate limiting
+                meta = data.get("meta", {}) if data else {}
+                warning = meta.get("warning", "")
+                rate_limit_errors = meta.get("rate_limit_errors", [])
+                
+                if rate_limit_errors:
+                    return {
+                        "type": "text", 
+                        "content": f"⚠️ Rate limiting от Hugging Face для годов: {rate_limit_errors}.\n\n"
+                                 f"Попробуйте запросить один год, например: 'ИНН {inn} сравни с отраслью 2023'"
+                    }
+                
+                return {
+                    "type": "text", 
+                    "content": f"Не удалось построить бенчмарк для ИНН {inn}. Возможно, нет данных или не определена отрасль."
+                }
+            
+            rows = data["rows"]
+            rows.sort(key=lambda x: x.get("year", 0))
+            section = rows[0].get("okved_section", "?")
+            
+            lines = [f"📊 Бенчмарк по отрасли (секция {section}), ИНН {inn}", ""]
+            
+            for r in rows:
+                y = r.get("year")
+                rev_comp = self._format_number(r.get("company_line_2110"))
+                rev_med = self._format_number(r.get("sector_median_line_2110"))
+                prof_comp = self._format_number(r.get("company_line_2400"))
+                prof_med = self._format_number(r.get("sector_median_line_2400"))
+                
+                lines.append(f"📅 {y}")
+                lines.append(f"  Выручка: {rev_comp} (Рынок: {rev_med})")
+                lines.append(f"  Прибыль: {prof_comp} (Рынок: {prof_med})")
+                lines.append("")
+                
+            lines.append(f"Всего компаний в выборке: {self._format_number(rows[0].get('sector_count'))}")
+            
+            # Добавляем предупреждение о rate limiting, если есть
+            meta = data.get("meta", {})
+            if meta.get("rate_limit_errors"):
+                lines.append("")
+                lines.append(f"⚠️ Некоторые годы ({meta['rate_limit_errors']}) не обработаны из-за rate limiting.")
+            
+            return {"type": "text", "content": "\n".join(lines)}
+
         else:
-            # Дефолтные поля для краткого просмотра
             fields = ["inn", "year", "line_2110", "line_2400"]
             data = await rfsd_client.company_timeseries(inn, years, fields, limit=100)
             

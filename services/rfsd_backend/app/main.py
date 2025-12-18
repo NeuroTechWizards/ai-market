@@ -1,6 +1,7 @@
 """Основной модуль FastAPI приложения RFSD Backend."""
 
 import logging
+import asyncio
 from time import perf_counter
 from typing import Any
 from datetime import datetime
@@ -10,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Query, Response
 import polars as pl
 
 from . import schemas
-from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year, load_indicators_dict
+from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year, load_indicators_dict, _scan_year
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,6 @@ _DEFAULT_FIELDS = [
     "line_2400",
 ]
 
-
 _INDICATORS_DICT = {}
 
 @app.on_event("startup")
@@ -54,14 +54,9 @@ async def health_check() -> dict[str, str]:
 async def get_sample(
     year: int = Query(default=2023, ge=2011, le=2024, description="Год данных"),
     limit: int = Query(default=5, ge=1, le=100, description="Количество строк (1-100)"),
-    fields: str | None = Query(
-        default="inn,year",
-        description="Список полей через запятую",
-    ),
+    fields: str | None = Query(default="inn,year", description="Список полей через запятую"),
 ) -> dict[str, Any]:
-    """Быстрый endpoint для получения сэмпла данных без полной загрузки."""
-
-    # Парсим fields
+    """Быстрый endpoint для получения сэмпла данных."""
     if fields:
         fields_list = [f.strip() for f in fields.split(",") if f.strip()]
     else:
@@ -70,7 +65,6 @@ async def get_sample(
     try:
         df = sample_year(year=year, columns=fields_list, n=limit)
         rows = df.to_dicts()
-
         return {
             "year": year,
             "columns": fields_list,
@@ -84,46 +78,29 @@ async def get_sample(
 @app.post("/rfsd/company_timeseries", response_model=schemas.TableResponse)
 async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schemas.TableResponse:
     """Поиск компании по ИНН в нескольких годах."""
-
-    # Определяем годы для сканирования
     years_to_scan = request.years if request.years is not None else [2022, 2023, 2024]
-
-    # Определяем поля
     fields = request.fields if request.fields is not None else _DEFAULT_FIELDS.copy()
 
-    # Если сканируем несколько лет, нужно обязательно вернуть year, чтобы различать данные
     if len(years_to_scan) > 1 and "year" not in fields:
         fields.append("year")
 
-    # Проверяем схему и фильтруем несуществующие колонки
     dropped_fields: list[str] = []
     if years_to_scan:
-        # Берем схему первого года как эталон
         schema_columns = get_schema_columns(years_to_scan[0])
-        # year всегда доступен (виртуальная колонка)
         valid_fields = [f for f in fields if f in schema_columns or f == "year"]
         dropped_fields = [f for f in fields if f not in valid_fields]
         fields = valid_fields
 
-    logger.info(
-        f"company_timeseries: inn={request.inn}, years={years_to_scan}, "
-        f"fields={fields}, limit={request.limit}"
-    )
+    logger.info(f"company_timeseries: inn={request.inn}, years={years_to_scan}, fields={fields}, limit={request.limit}")
 
     start_time = perf_counter()
     frames: list = []
     per_year_elapsed_ms: dict[int, float] = {}
 
-    # Сканируем по годам
     for year in years_to_scan:
         year_start = perf_counter()
         try:
-            df = filter_inn_year(
-                year=year,
-                inn=request.inn,
-                columns=fields,
-                limit=request.limit,
-            )
+            df = filter_inn_year(year=year, inn=request.inn, columns=fields, limit=request.limit)
             if df.height > 0:
                 frames.append(df)
             per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
@@ -131,18 +108,15 @@ async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schem
             logger.warning(f"Ошибка при обработке года {year}: {e}")
             per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
 
-    # Конкатенируем результаты
     if frames:
         if len(frames) > 1:
             result_df = pl.concat(frames, how="diagonal")
         else:
             result_df = frames[0]
 
-        # Сортируем по year, если колонка есть
         if "year" in result_df.columns:
             result_df = result_df.sort("year")
 
-        # Обрезаем до limit
         if result_df.height > request.limit:
             result_df = result_df.head(request.limit)
 
@@ -150,17 +124,11 @@ async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schem
         rows = result_df.to_dicts()
         matched_rows = result_df.height
     else:
-        # Ничего не найдено
         columns = fields
         rows = []
         matched_rows = 0
 
     elapsed_ms = (perf_counter() - start_time) * 1000
-
-    logger.info(
-        f"company_timeseries завершен: inn={request.inn}, "
-        f"matched_rows={matched_rows}, elapsed_ms={elapsed_ms:.2f}"
-    )
 
     meta = {
         "years_scanned": years_to_scan,
@@ -172,21 +140,13 @@ async def company_timeseries(request: schemas.CompanyTimeseriesRequest) -> schem
     if dropped_fields:
         meta["dropped_fields"] = dropped_fields
 
-    return schemas.TableResponse(
-        columns=columns,
-        rows=rows,
-        meta=meta,
-        files=None,
-    )
+    return schemas.TableResponse(columns=columns, rows=rows, meta=meta, files=None)
 
 
 @app.post("/rfsd/company_revenue_timeseries", response_model=schemas.CompanyRevenueTimeseriesResponse)
 async def company_revenue_timeseries(request: schemas.CompanyRevenueTimeseriesRequest) -> schemas.CompanyRevenueTimeseriesResponse:
     """Вернуть выручку компании (line_2110) по годам."""
-    
-    # 1. Годы по умолчанию
     years_to_scan = request.years if request.years is not None else [2019, 2020, 2021, 2022, 2023]
-    
     logger.info(f"company_revenue_timeseries: inn={request.inn}, years={years_to_scan}")
     
     start_time = perf_counter()
@@ -194,26 +154,16 @@ async def company_revenue_timeseries(request: schemas.CompanyRevenueTimeseriesRe
     matched_rows = 0
     per_year_elapsed_ms: dict[int, float] = {}
     
-    # Поля строго фиксированы
     fields = ["inn", "year", "line_2110"]
     
-    # 2. Цикл по годам (без join'ов, просто сбор данных)
     for year in years_to_scan:
         year_start = perf_counter()
         try:
-            # Используем существующий loader
-            df = filter_inn_year(
-                year=year,
-                inn=request.inn,
-                columns=fields,
-                limit=1  # Нам нужна только 1 строка на год для компании
-            )
+            df = filter_inn_year(year=year, inn=request.inn, columns=fields, limit=1)
             
             if df.height > 0:
                 row = df.row(0, named=True)
-                # Извлекаем выручку (может быть None)
                 revenue_val = row.get("line_2110")
-                # Преобразуем к float, если не None
                 if revenue_val is not None:
                     try:
                         revenue_val = float(revenue_val)
@@ -224,18 +174,13 @@ async def company_revenue_timeseries(request: schemas.CompanyRevenueTimeseriesRe
                 matched_rows += 1
                 
             per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
-            
         except Exception as e:
-            # Ошибки (например, файла за год нет) игнорируем, просто идем дальше
             logger.warning(f"Ошибка при получении выручки за {year}: {e}")
             per_year_elapsed_ms[year] = (perf_counter() - year_start) * 1000
 
-    # 3. Сортировка по year ASC
     series.sort(key=lambda x: x.year)
-    
     elapsed_ms = (perf_counter() - start_time) * 1000
     
-    # 4. Формирование ответа
     return schemas.CompanyRevenueTimeseriesResponse(
         inn=request.inn,
         series=series,
@@ -251,36 +196,22 @@ async def company_revenue_timeseries(request: schemas.CompanyRevenueTimeseriesRe
 @app.post("/rfsd/export_company_revenue_xlsx")
 async def export_company_revenue_xlsx(request: schemas.ExportCompanyRevenueRequest):
     """Экспорт выручки компании в Excel файл."""
-    
-    # 1. Повторно используем логику получения данных
-    # Формируем внутренний запрос
-    internal_req = schemas.CompanyRevenueTimeseriesRequest(
-        inn=request.inn,
-        years=request.years
-    )
-    
-    # Вызываем функцию получения данных (напрямую, как корутину)
+    internal_req = schemas.CompanyRevenueTimeseriesRequest(inn=request.inn, years=request.years)
     data = await company_revenue_timeseries(internal_req)
     
-    # 2. Формируем Excel
     try:
         import openpyxl
-        
         wb = openpyxl.Workbook()
-        
-        # Лист 1: revenue_timeseries
         ws1 = wb.active
         ws1.title = "revenue_timeseries"
         ws1.append(["year", "revenue"])
         for item in data.series:
             ws1.append([item.year, item.revenue])
             
-        # Лист 2: meta
         ws2 = wb.create_sheet("meta")
         ws2.append(["inn", "elapsed_ms", "generated_at"])
         ws2.append([data.inn, data.meta.get("elapsed_ms"), datetime.now().isoformat()])
         
-        # Сохраняем в буфер
         output = BytesIO()
         wb.save(output)
         output.seek(0)
@@ -292,7 +223,6 @@ async def export_company_revenue_xlsx(request: schemas.ExportCompanyRevenueReque
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-        
     except Exception as e:
         logger.error(f"Ошибка при генерации Excel: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка генерации Excel: {str(e)}")
@@ -301,48 +231,36 @@ async def export_company_revenue_xlsx(request: schemas.ExportCompanyRevenueReque
 @app.post("/rfsd/export_full_profile_xlsx")
 async def export_full_profile_xlsx(request: schemas.ExportFullProfileRequest):
     """Экспорт ВСЕХ финансовых показателей компании в Excel (Profile)."""
-
     years_to_scan = request.years if request.years is not None else [2019, 2020, 2021, 2022, 2023]
     logger.info(f"export_full_profile_xlsx: inn={request.inn}, years={years_to_scan}")
     
     start_time = perf_counter()
 
     try:
-        # 1. Получаем список всех доступных колонок из схемы последнего года
         schema_cols = get_schema_columns(2023)
-        # Фильтруем только line_...
         financial_lines = [c for c in schema_cols if c.startswith("line_")]
         financial_lines.sort() 
         
         fields_to_load = ["inn", "year"] + financial_lines
         
-        # 2. Скачиваем данные по годам
         frames = []
         for year in years_to_scan:
             try:
-                # Фильтруем те поля, которые реально есть в ЭТОМ году
                 current_year_schema = get_schema_columns(year)
                 current_fields = [f for f in fields_to_load if f in current_year_schema or f == "year"]
                 
-                df = filter_inn_year(
-                    year=year,
-                    inn=request.inn,
-                    columns=current_fields,
-                    limit=1
-                )
+                df = filter_inn_year(year=year, inn=request.inn, columns=current_fields, limit=1)
                 if df.height > 0:
                     frames.append(df)
             except Exception as e:
                 logger.warning(f"Error loading year {year}: {e}")
         
-        # 3. Объединяем
         if not frames:
              raise HTTPException(status_code=404, detail="Data not found for this INN")
              
         full_df = pl.concat(frames, how="diagonal")
         full_df = full_df.sort("year")
         
-        # 4. Трансформируем в формат: Строки = Показатели, Столбцы = Годы
         matrix = {code: {} for code in financial_lines}
         
         for row in full_df.to_dicts():
@@ -351,21 +269,16 @@ async def export_full_profile_xlsx(request: schemas.ExportFullProfileRequest):
                 if k.startswith("line_") and v is not None:
                      matrix[k][y] = v
                      
-        # Используем глобальный справочник, загруженный при старте
-        # indicators_dict = load_indicators_dict() <- БЫЛО
         indicators_dict = _INDICATORS_DICT
                      
-        # 5. Генерируем Excel
         import openpyxl
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Financial Profile"
         
-        # Заголовки: Indicator Code | Indicator Name (RU) | 2019 | 2020 | ...
         headers = ["Indicator Code", "Indicator Name (RU)"] + [str(y) for y in years_to_scan]
         ws.append(headers)
         
-        # Заполняем строки
         for code in financial_lines:
             name_ru = indicators_dict.get(code, "")
             row_data = [code, name_ru]
@@ -374,7 +287,6 @@ async def export_full_profile_xlsx(request: schemas.ExportFullProfileRequest):
                 row_data.append(val)
             ws.append(row_data)
             
-        # Лист 2: meta
         ws2 = wb.create_sheet("meta")
         ws2.append(["inn", "generated_at", "elapsed_s"])
         elapsed = perf_counter() - start_time
@@ -397,3 +309,128 @@ async def export_full_profile_xlsx(request: schemas.ExportFullProfileRequest):
     except Exception as e:
         logger.error(f"Full profile export error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rfsd/sector_benchmark", response_model=schemas.TableResponse)
+async def sector_benchmark(request: schemas.SectorBenchmarkRequest) -> schemas.TableResponse:
+    """Сравнение компании с отраслью (медиана) - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ."""
+    
+    years_to_scan = request.years if request.years is not None else [2019, 2020, 2021, 2022, 2023]
+    metrics = request.metrics if request.metrics is not None else ["line_2110", "line_2400"]
+    
+    logger.info(f"sector_benchmark: inn={request.inn}, years={years_to_scan}, metrics={metrics}")
+    
+    start_time = perf_counter()
+    per_year_elapsed_ms: dict[str, float] = {}
+    result_rows = []
+    rate_limit_errors = []
+    
+    for idx, year in enumerate(years_to_scan):
+        # Добавляем задержку между запросами к Hugging Face для снижения rate limiting
+        if idx > 0:
+            await asyncio.sleep(0.5)  # 500ms задержка между годами
+        
+        year_start = perf_counter()
+        try:
+            # Шаг A: Находим компанию и её отрасль
+            comp_df = filter_inn_year(
+                year=year,
+                inn=request.inn,
+                columns=["inn", "year", "okved_section"] + metrics,
+                limit=1
+            )
+            
+            if comp_df.height == 0:
+                per_year_elapsed_ms[str(year)] = (perf_counter() - year_start) * 1000
+                continue
+                
+            comp_row = comp_df.row(0, named=True)
+            section = comp_row.get("okved_section")
+            
+            if not section:
+                logger.warning(f"No okved_section for INN {request.inn} in {year}")
+                per_year_elapsed_ms[str(year)] = (perf_counter() - year_start) * 1000
+                continue
+                
+            # Шаг B: Оптимизированный расчёт статистики сектора
+            # УСКОРИТЕЛЬ 1: Только нужные колонки
+            sector_cols = ["okved_section"] + metrics
+            
+            # УСКОРИТЕЛЬ 2: Lazy evaluation с агрегацией
+            scan = _scan_year(year, columns=sector_cols)
+            
+            # Фильтруем по секции
+            scan = scan.filter(pl.col("okved_section") == section)
+            
+            # УСКОРИТЕЛЬ 3: Ограничение выборки (предохранитель)
+            scan = scan.head(request.limit_sector)
+            
+            # Фильтруем null по каждой метрике
+            for m in metrics:
+                scan = scan.filter(pl.col(m).is_not_null())
+            
+            # УСКОРИТЕЛЬ 4: Только median (без P25/P75 для скорости)
+            # Используем quantile с interpolation="nearest" для скорости
+            agg_exprs = [pl.len().alias("sector_count")]
+            for m in metrics:
+                # median через quantile(0.5)
+                agg_exprs.append(
+                    pl.col(m).quantile(0.5, interpolation="nearest").alias(f"sector_median_{m}")
+                )
+            
+            sector_stats = scan.select(agg_exprs).collect()
+            
+            if sector_stats.height > 0:
+                stats_row = sector_stats.row(0, named=True)
+                
+                # Формируем итоговую строку
+                row_out = {
+                    "year": year,
+                    "okved_section": section,
+                    "sector_count": stats_row["sector_count"],
+                    "sampled_rows": min(request.limit_sector, stats_row["sector_count"])
+                }
+                
+                # Данные компании и сектора
+                for m in metrics:
+                    row_out[f"company_{m}"] = comp_row.get(m)
+                    row_out[f"sector_median_{m}"] = stats_row.get(f"sector_median_{m}")
+                    
+                result_rows.append(row_out)
+                
+            per_year_elapsed_ms[str(year)] = (perf_counter() - year_start) * 1000
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Проверяем, является ли это ошибкой rate limiting
+            if "429" in error_msg or "rate limit" in error_msg.lower():
+                rate_limit_errors.append(year)
+                logger.warning(f"Rate limit error for year {year}. Skipping.")
+            else:
+                logger.error(f"Error benchmarking {year}: {e}", exc_info=True)
+            per_year_elapsed_ms[str(year)] = (perf_counter() - year_start) * 1000
+
+    elapsed_ms = (perf_counter() - start_time) * 1000
+    
+    # Формируем колонки
+    columns = ["year", "okved_section", "sector_count", "sampled_rows"]
+    for m in metrics:
+        columns.extend([f"company_{m}", f"sector_median_{m}"])
+
+    meta = {
+        "years_scanned": years_to_scan,
+        "matched_rows": len(result_rows),
+        "elapsed_ms": round(elapsed_ms, 2),
+        "per_year_elapsed_ms": {k: round(v, 2) for k, v in per_year_elapsed_ms.items()}
+    }
+    
+    # Добавляем информацию о rate limiting в мета
+    if rate_limit_errors:
+        meta["rate_limit_errors"] = rate_limit_errors
+        meta["warning"] = f"Некоторые годы ({rate_limit_errors}) не обработаны из-за rate limiting. Попробуйте запросить меньше лет или подождите."
+
+    return schemas.TableResponse(
+        columns=columns,
+        rows=result_rows,
+        meta=meta
+    )

@@ -21,44 +21,24 @@ _DEFAULT_FIELDS = [
 
 class CompanyTimeseriesRequest(BaseModel):
     """Запрос на получение временного ряда по компании."""
-
     inn: str = Field(..., description="ИНН компании")
-    years: list[int] | None = Field(
-        default=[2022, 2023, 2024],
-        description="Список годов для поиска. По умолчанию [2022, 2023, 2024]",
-    )
-    fields: list[str] | None = Field(
-        default=None,
-        description=f"Список полей для выборки. По умолчанию: {_DEFAULT_FIELDS}",
-    )
-    limit: int = Field(
-        default=200,
-        ge=1,
-        le=1000,
-        description="Максимальное количество строк в результате (1-1000)",
-    )
+    years: list[int] | None = Field(default=[2022, 2023, 2024], description="Список годов")
+    fields: list[str] | None = Field(default=None, description=f"Список полей")
+    limit: int = Field(default=200, ge=1, le=1000, description="Максимальное количество строк")
 
 
 class TableResponse(BaseModel):
     """Ответ с табличными данными."""
-
     columns: list[str] = Field(..., description="Список колонок")
     rows: list[dict[str, Any]] = Field(..., description="Строки данных")
     meta: dict[str, Any] = Field(..., description="Метаданные запроса")
-    files: list[dict[str, Any]] | None = Field(
-        default=None,
-        description="Список файлов (пока не используется)",
-    )
+    files: list[dict[str, Any]] | None = Field(default=None, description="Список файлов")
 
 
 class CompanyRevenueTimeseriesRequest(BaseModel):
     """Запрос на получение выручки (line_2110) по годам."""
-
     inn: str = Field(..., description="ИНН компании")
-    years: list[int] | None = Field(
-        default=None,
-        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
-    )
+    years: list[int] | None = Field(default=None, description="Список годов")
 
 
 class RevenueYear(BaseModel):
@@ -69,7 +49,6 @@ class RevenueYear(BaseModel):
 
 class CompanyRevenueTimeseriesResponse(BaseModel):
     """Ответ с временным рядом выручки."""
-
     inn: str
     series: list[RevenueYear]
     meta: dict[str, Any]
@@ -77,20 +56,19 @@ class CompanyRevenueTimeseriesResponse(BaseModel):
 
 class ExportCompanyRevenueRequest(BaseModel):
     """Запрос на экспорт выручки в Excel."""
-
     inn: str = Field(..., description="ИНН компании")
-    years: list[int] | None = Field(
-        default=None,
-        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
-    )
+    years: list[int] | None = Field(default=None, description="Список годов")
 
 
 class ExportFullProfileRequest(BaseModel):
     """Запрос на экспорт ВСЕХ показателей в Excel."""
-
     inn: str = Field(..., description="ИНН компании")
-    years: list[int] | None = Field(
-        default=None,
-        description="Список годов. По умолчанию [2019, 2020, 2021, 2022, 2023]",
-    )
+    years: list[int] | None = Field(default=None, description="Список годов")
 
+
+class SectorBenchmarkRequest(BaseModel):
+    """Запрос на сравнение с отраслью."""
+    inn: str = Field(..., description="ИНН компании")
+    years: list[int] | None = Field(default=None, description="Список годов. По умолчанию последние 5 лет.")
+    metrics: list[str] | None = Field(default=["line_2110", "line_2400"], description="Коды метрик")
+    limit_sector: int = Field(default=200000, description="Лимит строк сектора для безопасности")
