@@ -462,3 +462,29 @@ async def sector_benchmark(request: schemas.SectorBenchmarkRequest) -> schemas.T
         rows=result_rows,
         meta=meta
     )
+
+
+@app.post("/example/register", response_model=schemas.UserRegistrationResponse)
+async def example_register(request: schemas.UserRegistrationRequest) -> schemas.UserRegistrationResponse:
+    """
+    Пример endpoint с валидацией полей (для теста Context7).
+    
+    Демонстрирует использование Pydantic Field с различными валидаторами:
+    - min_length/max_length для строк
+    - pattern для регулярных выражений (ИНН, email)
+    - ge/le для числовых диапазонов
+    
+    FastAPI автоматически валидирует запрос и возвращает 422 при ошибках.
+    """
+    logger.info(f"Registration request: {request.name}, {request.email}, INN: {request.inn}")
+    
+    return schemas.UserRegistrationResponse(
+        status="success",
+        message=f"Пользователь {request.name} успешно зарегистрирован",
+        data={
+            "inn": request.inn,
+            "email": request.email,
+            "age": request.age,
+            "name": request.name
+        }
+    )

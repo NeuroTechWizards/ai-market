@@ -84,3 +84,39 @@ class AgentQueryResponse(BaseModel):
     """Ответ AI-агента."""
     answer: str = Field(..., description="Текстовый ответ LLM")
     meta: dict[str, Any] = Field(default_factory=dict, description="Метаданные")
+
+
+# Пример схемы с валидацией для тестирования Context7
+class UserRegistrationRequest(BaseModel):
+    """Пример запроса с валидацией полей (для теста Context7)."""
+    inn: str = Field(
+        ..., 
+        description="ИНН компании (10 или 12 цифр)",
+        min_length=10,
+        max_length=12,
+        pattern=r"^\d{10}$|^\d{12}$"
+    )
+    email: str = Field(
+        ..., 
+        description="Email адрес",
+        pattern=r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    )
+    age: int = Field(
+        ..., 
+        description="Возраст",
+        ge=18,
+        le=100
+    )
+    name: str = Field(
+        ..., 
+        description="Имя пользователя",
+        min_length=2,
+        max_length=50
+    )
+
+
+class UserRegistrationResponse(BaseModel):
+    """Ответ на регистрацию."""
+    status: str
+    message: str
+    data: dict[str, Any]

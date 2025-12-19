@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     debug: bool = False
     HF_TOKEN: str | None = None
     OPENAI_API_KEY: str | None = None
+    LLM_ENDPOINT_URL: str | None = None  # Colab или другой совместимый endpoint
 
     class Config:
         env_file = ".env"
