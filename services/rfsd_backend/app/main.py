@@ -11,7 +11,15 @@ from fastapi import FastAPI, HTTPException, Query, Response
 import polars as pl
 
 from . import schemas
-from .rfsd_loader import filter_inn_year, get_schema_columns, sample_year, load_indicators_dict, _scan_year
+from .rfsd_loader import (
+    filter_inn_year, 
+    get_schema_columns, 
+    sample_year, 
+    load_indicators_dict, 
+    _scan_year,
+    preload_cache,
+    get_cache_info
+)
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +46,7 @@ _INDICATORS_DICT = {}
 
 @app.on_event("startup")
 async def startup_event():
-    """Загружаем справочники при старте."""
+    """Загружаем справочники и кэш данных при старте."""
     global _INDICATORS_DICT
     
     # Проверка токена
@@ -51,6 +59,17 @@ async def startup_event():
     logger.info("Loading indicators databook...")
     _INDICATORS_DICT = load_indicators_dict()
     logger.info(f"Loaded {len(_INDICATORS_DICT)} indicators.")
+    
+    # Предзагрузка кэша данных (в фоне, чтобы не блокировать старт)
+    logger.info("Starting cache preload...")
+    try:
+        # Запускаем в отдельной задаче, чтобы не блокировать старт
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, preload_cache)
+        logger.info("Cache preload started in background")
+    except Exception as e:
+        logger.error(f"Error starting cache preload: {e}")
 
 from .agent_orchestrator import agent
 
@@ -70,9 +89,17 @@ async def agent_query(request: schemas.AgentQueryRequest) -> schemas.AgentQueryR
             "elapsed_ms": round(elapsed_ms, 2)
         }
     )
+
+@app.get("/health")
 async def health_check() -> dict[str, str]:
     """Проверка здоровья сервиса."""
     return {"status": "ok"}
+
+
+@app.get("/cache/status")
+async def cache_status() -> dict[str, Any]:
+    """Возвращает информацию о кэше данных."""
+    return get_cache_info()
 
 
 @app.get("/rfsd/sample")
